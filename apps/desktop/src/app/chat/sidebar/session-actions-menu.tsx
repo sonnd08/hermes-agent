@@ -54,12 +54,7 @@ import {
 } from '@/store/session'
 import { $sessionColorOverrides, setSessionColorOverride } from '@/store/session-color'
 import { ambientRequestFor } from '@/store/session-gone-latch'
-import {
-  $sessionStates,
-  $sessionTiles,
-  closeAllOpenSessionTiles,
-  requestForOwnedSession
-} from '@/store/session-states'
+import { $sessionStates, $sessionTiles, closeAllOpenSessionTiles, requestForOwnedSession } from '@/store/session-states'
 import { ackStoredSessionId } from '@/store/session-unread'
 import { canOpenSessionInTerminal, canOpenSessionWindow, openSessionInTerminal } from '@/store/windows'
 
@@ -151,6 +146,54 @@ export async function renameSessionPreferringRpc(
   }
 
   return renameSession(storedSessionId, title, resolvedProfile)
+}
+
+/** The one rename commit every rename surface shares (the dialog and the
+ *  sidebar row's inline editor): trims, skips a no-op, writes through the
+ *  RPC-preferring path, patches every list the title appears in, and toasts.
+ *  Resolves `true` when the editor may close (renamed or unchanged), `false`
+ *  when the write failed and the error was already surfaced. */
+export async function commitSessionRename({
+  copy,
+  currentTitle,
+  next: rawNext,
+  profile,
+  sessionId
+}: {
+  /** The caller's `t.sidebar.row` toasts (kept a param so this stays a plain
+   *  async function rather than a hook). */
+  copy: { renameFailed: string; renamed: string }
+  currentTitle: string
+  next: string
+  profile?: string
+  sessionId: string
+}): Promise<boolean> {
+  const next = rawNext.trim()
+
+  if (next === currentTitle.trim()) {
+    return true
+  }
+
+  try {
+    const targetProfile =
+      (profile ?? '').trim() || $sessions.get().find(s => sessionMatchesStoredId(s, sessionId))?.profile || undefined
+
+    const result = await renameSessionPreferringRpc(sessionId, next, targetProfile)
+    const finalTitle = result.title || next || ''
+    // One write, every list: patch the main store AND the project surfaces.
+    // Bare-id patching only the recents slice left project-scoped rows
+    // (overview previews, entered-project lanes) on the stale title until a
+    // profile switch forced a refetch (#123337).
+    applySessionTitle(sessionId, finalTitle || null)
+    applyRenamedSessionTitle(sessionId, finalTitle || null)
+    notify({ durationMs: 2_000, kind: 'success', message: copy.renamed })
+
+    return true
+  } catch (err) {
+    notifyError(err, copy.renameFailed)
+
+    return false
+  }
 }
 
 interface SessionActions {
@@ -759,36 +802,16 @@ function RenameSessionDialog({ open, onOpenChange, sessionId, currentTitle, prof
   }, [currentTitle, open])
 
   const submit = async () => {
-    const next = value.trim()
-
     if (!sessionId || submitting) {
-      return
-    }
-
-    if (next === currentTitle.trim()) {
-      onOpenChange(false)
-
       return
     }
 
     setSubmitting(true)
 
     try {
-      const targetProfile =
-        (profile ?? '').trim() || $sessions.get().find(s => sessionMatchesStoredId(s, sessionId))?.profile || undefined
-
-      const result = await renameSessionPreferringRpc(sessionId, next, targetProfile)
-      const finalTitle = result.title || next || ''
-      // One write, every list: patch the main store AND the project surfaces.
-      // Bare-id patching only the recents slice left project-scoped rows
-      // (overview previews, entered-project lanes) on the stale title until a
-      // profile switch forced a refetch (#123337).
-      applySessionTitle(sessionId, finalTitle || null)
-      applyRenamedSessionTitle(sessionId, finalTitle || null)
-      notify({ durationMs: 2_000, kind: 'success', message: r.renamed })
-      onOpenChange(false)
-    } catch (err) {
-      notifyError(err, r.renameFailed)
+      if (await commitSessionRename({ copy: r, currentTitle, next: value, profile, sessionId })) {
+        onOpenChange(false)
+      }
     } finally {
       setSubmitting(false)
     }

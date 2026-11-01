@@ -1,6 +1,6 @@
 import { compactNumber } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import type * as React from 'react'
 
 import { PrTag } from '@/app/chat/pr-tag'
@@ -53,6 +53,7 @@ import { shellOwnsPress } from './reorderable-list'
 import { SessionActionsMenu, SessionContextMenu } from './session-actions-menu'
 import { sessionRowDetails } from './session-row-details'
 import { resolveSessionRowClick } from './session-row-gesture'
+import { SessionRowInlineRename } from './session-row-inline-rename'
 import { SessionRowSlot } from './session-row-slots'
 import { useProfilePrewarm } from './use-profile-prewarm'
 
@@ -185,6 +186,35 @@ function SidebarSessionRowImpl({
   // tile opens or closes, and the boolean bails every unaffected row out.
   const openUnfocused = useStoreSelector($openStoredSessionIds, open => !isSelected && open.has(session.id))
   const totalTokens = session.input_tokens + session.output_tokens
+  // Double-click the title to rename in place (Codex / Claude muscle memory).
+  // Component state, not a store: only this row's own title swaps for an
+  // editor, and it never needs to survive the row unmounting.
+  const [renaming, setRenaming] = useState(false)
+
+  // A plain double-click only: the modifier clicks already mean pin / new tab /
+  // window / archive, and their second click must not also open an editor.
+  // The first click of the pair has resumed the session, which is fine — the
+  // row you rename is the one you are looking at.
+  const beginRename = (event: React.MouseEvent) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    setRenaming(true)
+  }
+
+  const renameEditor = (className?: string) => (
+    <SessionRowInlineRename
+      className={className}
+      currentTitle={title}
+      onDone={() => setRenaming(false)}
+      profile={session.profile}
+      sessionId={session.id}
+    />
+  )
+
   const cost = sessionCostUsd(session)
 
   // Tokens, cost and age share one figure rather than each claiming a column:
@@ -541,17 +571,21 @@ function SidebarSessionRowImpl({
                         exactly as they did on the old full-row button. The
                         OverflowTip stays on the truncating label so its
                         scrollWidth measurement is unchanged. */}
-                    <RowButton className="block w-full text-left">
-                      <OverflowTip label={title} placement="row">
-                        <SidebarRowLabel
-                          className="hover-marquee block font-normal group-hover:text-foreground group-data-[working=true]:text-foreground/90"
-                          onPointerEnter={armMarquee}
-                          onPointerLeave={disarmMarquee}
-                        >
-                          <span className="hover-marquee-inner">{title}</span>
-                        </SidebarRowLabel>
-                      </OverflowTip>
-                    </RowButton>
+                    {renaming ? (
+                      renameEditor('text-[0.8125rem] leading-[1.35]')
+                    ) : (
+                      <RowButton className="block w-full text-left" onDoubleClick={beginRename}>
+                        <OverflowTip label={title} placement="row">
+                          <SidebarRowLabel
+                            className="hover-marquee block font-normal group-hover:text-foreground group-data-[working=true]:text-foreground/90"
+                            onPointerEnter={armMarquee}
+                            onPointerLeave={disarmMarquee}
+                          >
+                            <span className="hover-marquee-inner">{title}</span>
+                          </SidebarRowLabel>
+                        </OverflowTip>
+                      </RowButton>
+                    )}
                     {/* Session-list density (#68119): comfortable adds one
                         deterministic metadata line; detailed adds the initial
                         request preview. Compact keeps today's one-line row. */}
@@ -609,20 +643,24 @@ function SidebarSessionRowImpl({
                   {/* #38072 finding 3: the card's title line is the row's real
                       button (same contract as the flat row: no onClick of its
                       own — the click bubbles to the body div's resolver). */}
-                  <RowButton className="block w-full text-left">
-                    <OverflowTip label={title} placement="row">
-                      <SidebarRowLabel
-                        className={cn(
-                          'hover-marquee text-[0.8125rem] font-medium text-(--ui-text-primary) group-data-[working=true]:text-foreground',
-                          SIDEBAR_TRUNCATED_LEADING
-                        )}
-                        onPointerEnter={armMarquee}
-                        onPointerLeave={disarmMarquee}
-                      >
-                        <span className="hover-marquee-inner">{title}</span>
-                      </SidebarRowLabel>
-                    </OverflowTip>
-                  </RowButton>
+                  {renaming ? (
+                    renameEditor('text-[0.8125rem] font-medium')
+                  ) : (
+                    <RowButton className="block w-full text-left" onDoubleClick={beginRename}>
+                      <OverflowTip label={title} placement="row">
+                        <SidebarRowLabel
+                          className={cn(
+                            'hover-marquee text-[0.8125rem] font-medium text-(--ui-text-primary) group-data-[working=true]:text-foreground',
+                            SIDEBAR_TRUNCATED_LEADING
+                          )}
+                          onPointerEnter={armMarquee}
+                          onPointerLeave={disarmMarquee}
+                        >
+                          <span className="hover-marquee-inner">{title}</span>
+                        </SidebarRowLabel>
+                      </OverflowTip>
+                    </RowButton>
+                  )}
                   {session.preview && rowMeta.includes('preview') ? (
                     <span
                       className={cn(
